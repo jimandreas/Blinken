@@ -1,0 +1,47 @@
+Question: the xperia 5 V does not have a notification led.   to solve the notification problem visually one solution is to turn on the lock screen to that it always displays something.  But I guess this will wear out the oled (?) screen a bit plus drain the battery.   Is there a good app that will display a notification instead of doing the lock screen clock display?
+
+CLAUDE answer: Evaluated edge-lighting notification apps as battery-efficient lockscreen alternativesEvaluated edge-lighting notification apps as battery-efficient lockscreen alternativesYou're right on both counts — a permanently-on clock display will cause slow OLED wear (static elements especially) and burns noticeably more battery than a brief flash-on-notification approach.
+The apps you want work differently: they sit in the background doing basically nothing until a notification arrives, then briefly light up an edge glow, a simulated LED dot, or a small AOD-style panel — then go dark again. A few worth trying:
+
+aodNotify (Notification Light) — probably the most mature option. It adds a customizable notification light around the camera cutout, on the screen edges, or as a simulated LED dot in the status bar, and is designed to integrate with AOD so it doesn't drain the battery, using as little as 0.5% per hour. It also has an eco/interval mode that trades a bit of visibility for even lower battery use. Uptodown
+NotifyBuddy — similar concept, brings up a black screen with an LED-style animation only when a notification you care about arrives, with adjustable animation time, color, and position. Free version works fine; premium just unlocks bigger dot size. Google Play
+True Edge — flashier, more actively developed, with fancier animations and even direct-reply from the edge screen without unlocking. Worth noting: some recent reviews complain the free tier's display duration was cut down to 30 seconds before the developer partially reverted it, so check current review sentiment before paying. Google Play
+
+Practical tips for the Xperia specifically:
+
+Disable battery optimization / put the app on "no restrictions" in Sony's battery settings, or Sony's aggressive background-app killing will silently stop it from triggering.
+Grant Notification Access (not just normal permissions) — all of these need it to see what's arrived.
+Start with "eco" or "interval" mode rather than continuous — cuts battery draw roughly in half per the aodNotify battery figures, and still gets the job done for a glance-check.
+
+None of these fully replicate a hardware LED (some interfere slightly with fingerprint unlock per user reports), but they're a solid middle ground between nothing and a fully-lit lock screen.can you write a notification app for my using the CLI interface?  I am an android developer.  I don't know if the app needs special permissions from Google to function...  But I am more than willing to work out an app with your help. (but not today - just provide guidance please).Architected notification system design and permission strategy for Android developmentArchitected notification system design and permission strategy for Android developmentGood project — and yes, totally doable without any special Google approval for personal/sideloaded use. Here's the roadmap so you have it in mind before we sit down to build it.
+Core pieces
+
+NotificationListenerService — this is how you intercept notifications system-wide. It requires the user (you) to manually grant "Notification access" in Settings → Apps → Special access; there's no runtime permission dialog and no Google review needed unless you publish to Play. You'd filter StatusBarNotification objects by package name to build your allowlist (WhatsApp, SMS, email, etc.) and pull out title/text/color-worthy metadata.
+The visual trigger, two viable approaches:
+
+Transparent Activity approach (simpler, more reliable on modern Android): from the listener service, launch a full-screen transparent Activity with setShowWhenLocked(true) and setTurnScreenOn(true) (API 27+). It draws your edge-glow/dot animation over the lock screen, then finish()s itself via a Handler.postDelayed after a few seconds. No always-on burn because it's only alive for the duration of the flash.
+Overlay window approach (TYPE_APPLICATION_OVERLAY + SYSTEM_ALERT_WINDOW): draws on top of everything without launching an Activity. More flexible for persistent corner indicators, but also a user-granted special-access permission, and clunkier to get right on Sony's skin.
+
+I'd lean toward the transparent-activity route first — fewer edge cases, better lifecycle management.
+Animation — a simple custom View with a Canvas draw loop or ValueAnimator driving alpha/color, positioned as a border or corner glow. Nothing exotic needed.
+Battery/reliability on Sony specifically — you'll want to request the user ignore battery optimizations for the app (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS), since Sony's Stamina mode is aggressive about killing background listeners. A lightweight foreground service can help keep the listener alive if you see it getting killed.
+
+On Google permissions specifically
+
+For your own sideloaded APK: nothing to submit anywhere, nothing to justify. You just grant yourself the access in Settings.
+If you ever wanted this on the Play Store: NotificationListenerService and SYSTEM_ALERT_WINDOW are both "restricted" permissions Google scrutinizes heavily (they're common in stalkerware), so you'd need to fill out a Permissions Declaration Form and possibly a demo video. Worth knowing now even if it's not the near-term plan.
+
+No FCM/push infrastructure needed at all — this is purely local notification interception, nothing server-side.
+When you're ready to actually start writing it, this maps well to Claude Code — happy to scaffold the manifest, listener service, and the transparent activity with you then.
+
+Question: OK good but what is a good name for the app.   Looking for something silly but meaningful.  I will create a folder for future work.
+
+CLAUDE Answer: Brainstormed playful notification app names blending cultural referencesBrainstormed playful notification app names blending cultural referencesA few options, playing off your Germany connection and the fact this is basically a fake LED:
+
+Blinkenlights — my top pick. It's a real piece of German-English computer folklore (the "ACHTUNG! ... BLINKENLICHTEN" sign warning American GIs not to touch the blinking lights on German mainframes). Silly, a little nerdy, genuinely meaningful given you're building blinking lights while living in Germany.
+Leuchtturm (lighthouse) — a small beacon flashing to tell you something's out there. Quietly poetic under the silliness.
+Glühwürmchen (firefly/glowworm) — cute, very German, and literally what the app does: brief flashes of light.
+NoLED Jr. — a nod to the app you mentioned missing that Android broke; frames yours as its spiritual successor.
+Ampelmann — riffing on the iconic East German traffic-light-man icon; "your phone's own little traffic signal."
+
+If I had to pick one to put on the folder: Blinkenlights.
