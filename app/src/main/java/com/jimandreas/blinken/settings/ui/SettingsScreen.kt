@@ -28,7 +28,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.jimandreas.blinken.notification.canUseFullScreenIntent
 import com.jimandreas.blinken.notification.isNotificationAccessGranted
+import com.jimandreas.blinken.notification.isPostNotificationsGranted
 import com.jimandreas.blinken.settings.AllowlistRepository
 import com.jimandreas.blinken.settings.AppEntry
 import com.jimandreas.blinken.settings.AppSettings
@@ -56,11 +58,15 @@ fun SettingsScreen(
     val allInstalledByPackage = remember(allInstalledApps) { allInstalledApps.associateBy { it.packageName } }
 
     var notificationAccessGranted by remember { mutableStateOf(isNotificationAccessGranted(context)) }
+    var postNotificationsGranted by remember { mutableStateOf(isPostNotificationsGranted(context)) }
+    var fullScreenIntentAllowed by remember { mutableStateOf(canUseFullScreenIntent(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 notificationAccessGranted = isNotificationAccessGranted(context)
+                postNotificationsGranted = isPostNotificationsGranted(context)
+                fullScreenIntentAllowed = canUseFullScreenIntent(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -83,6 +89,9 @@ fun SettingsScreen(
         ) {
             PermissionBanner(
                 notificationAccessGranted = notificationAccessGranted,
+                postNotificationsGranted = postNotificationsGranted,
+                fullScreenIntentAllowed = fullScreenIntentAllowed,
+                onPostNotificationsResult = { granted -> postNotificationsGranted = granted },
                 modifier = Modifier.padding(16.dp),
             )
             Row(

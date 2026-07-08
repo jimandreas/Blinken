@@ -1,14 +1,11 @@
 package com.jimandreas.blinken.notification
 
-import android.content.Intent
 import android.content.SharedPreferences
 import android.os.SystemClock
 import android.service.notification.NotificationListenerService
+import android.service.notification.NotificationListenerService.RankingMap
 import android.service.notification.StatusBarNotification
 import android.util.Log
-import com.jimandreas.blinken.flash.EXTRA_COLOR_ARGB
-import com.jimandreas.blinken.flash.EXTRA_DURATION_MS
-import com.jimandreas.blinken.flash.FlashActivity
 import com.jimandreas.blinken.settings.AllowlistRepository
 import com.jimandreas.blinken.settings.AppSettings
 import kotlinx.coroutines.CoroutineScope
@@ -48,8 +45,37 @@ class BlinkenListenerService : NotificationListenerService() {
         serviceJob = job
         scope = CoroutineScope(job + Dispatchers.Main.immediate)
         repository.settings
-            .onEach { cachedSettings.value = it }
+            .onEach {
+                Log.d(
+                    TAG,
+                    "settings updated: ecoMode=${it.ecoModeEnabled} entries=${it.entries.map { e -> "${e.packageName}(enabled=${e.enabled})" }}",
+                )
+                cachedSettings.value = it
+            }
             .launchIn(scope)
+
+        // Reminder alarms don't survive a reboot, and this process/service may have been
+        // killed and restarted independent of the notifications it was tracking - reconcile
+        // persisted active-notification state against the system's current truth so pending
+        // reminders resume (or stop) correctly rather than relying on stale bookkeeping.
+        scope.launch {
+            reconcileActiveReminders(repository.settings.first())
+        }
+    }
+
+    private fun reconcileActiveReminders(settings: AppSettings) {
+        val allowedPackages = settings.entries.filter { it.enabled }.map { it.packageName }.toSet()
+        val activeKeysByPackage = activeNotifications
+            .filter { it.packageName in allowedPackages }
+            .groupBy({ it.packageName }, { it.key })
+            .mapValues { (_, keys) -> keys.toSet() }
+
+        for (packageName in allowedPackages) {
+            val keys = activeKeysByPackage[packageName] ?: emptySet()
+            replaceActiveNotificationKeys(this, packageName, keys)
+            if (keys.isEmpty()) cancelReminder(this, packageName) else scheduleReminder(this, packageName)
+        }
+        Log.d(TAG, "reconciled active reminders for: ${activeKeysByPackage.keys}")
     }
 
     override fun onListenerDisconnected() {
@@ -66,29 +92,50 @@ class BlinkenListenerService : NotificationListenerService() {
         Log.d(TAG, "onNotificationPosted: $packageName")
 
         scope.launch {
-            val settings = cachedSettings.value ?: repository.settings.first()
-
-            val now = SystemClock.elapsedRealtime()
-            val lastFlash = ecoDebouncePrefs.getLong(packageName, -1L).takeIf { it >= 0L }
-            val elapsedSinceLastFlash = lastFlash?.let { now - it }
-
-            val spec = resolveBlink(
-                packageName = packageName,
-                settings = settings,
-                elapsedSinceLastFlashMs = elapsedSinceLastFlash,
-            ) ?: return@launch
-
-            ecoDebouncePrefs.edit().putLong(packageName, now).apply()
-            launchFlash(spec)
+            val cached = cachedSettings.value
+            val settings = cached ?: repository.settings.first()
+            Log.d(TAG, "settings source for $packageName: ${if (cached != null) "cache" else "fallback one-shot read"}")
+            handleNotification(sbn, settings)
         }
     }
 
-    private fun launchFlash(spec: BlinkSpec) {
-        val intent = Intent(this, FlashActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            putExtra(EXTRA_COLOR_ARGB, spec.colorArgb)
-            putExtra(EXTRA_DURATION_MS, spec.durationMs)
+    override fun onNotificationRemoved(sbn: StatusBarNotification, rankingMap: RankingMap) {
+        super.onNotificationRemoved(sbn, rankingMap)
+        val packageName = sbn.packageName
+        val nowEmpty = removeActiveNotificationKey(this, packageName, sbn.key)
+        Log.d(TAG, "onNotificationRemoved: $packageName key=${sbn.key} nowEmpty=$nowEmpty")
+        if (nowEmpty) cancelReminder(this, packageName)
+    }
+
+    private fun handleNotification(sbn: StatusBarNotification, settings: AppSettings) {
+        val packageName = sbn.packageName
+        val now = SystemClock.elapsedRealtime()
+        val lastFlash = ecoDebouncePrefs.getLong(packageName, -1L).takeIf { it >= 0L }
+        val elapsedSinceLastFlash = lastFlash?.let { now - it }
+        Log.d(TAG, "elapsedSinceLastFlash for $packageName: $elapsedSinceLastFlash ms (ecoMode=${settings.ecoModeEnabled})")
+
+        val entry = settings.entries.firstOrNull { it.packageName == packageName }
+        val spec = resolveBlink(
+            packageName = packageName,
+            settings = settings,
+            elapsedSinceLastFlashMs = elapsedSinceLastFlash,
+        )
+        if (spec == null) {
+            val reason = when {
+                entry == null -> "no allowlist entry for $packageName"
+                !entry.enabled -> "entry for $packageName is disabled"
+                else -> "eco-mode debounce for $packageName"
+            }
+            Log.d(TAG, "resolveBlink returned null: $reason")
+            return
         }
-        startActivity(intent)
+        Log.d(TAG, "resolveBlink matched $packageName: color=${spec.colorArgb.toString(16)} durationMs=${spec.durationMs}")
+
+        ecoDebouncePrefs.edit().putLong(packageName, now).apply()
+        postFlashTriggerNotification(this, packageName, spec, label = entry?.label ?: packageName)
+
+        val wasEmpty = !hasActiveNotifications(this, packageName)
+        addActiveNotificationKey(this, packageName, sbn.key)
+        if (wasEmpty) scheduleReminder(this, packageName)
     }
 }

@@ -1,46 +1,43 @@
 package com.jimandreas.blinken.flash
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.core.graphics.drawable.toBitmap
+
+private val BADGE_SIZE = 120.dp
+private val ICON_SIZE = 72.dp
 
 @Composable
-fun FlashScreen(color: Color, modifier: Modifier = Modifier) {
-    val transition = rememberInfiniteTransition(label = "blinkenPulse")
-    val alpha by transition.animateFloat(
-        initialValue = 0.25f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 700, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "pulseAlpha",
-    )
+fun FlashScreen(color: Color, packageName: String?, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val iconBitmap = remember(packageName) {
+        packageName?.let {
+            runCatching { context.packageManager.getApplicationIcon(it).toBitmap().asImageBitmap() }.getOrNull()
+        }
+    }
 
-    Canvas(modifier = modifier.fillMaxSize()) {
-        val strokeWidth = size.minDimension * 0.06f
-        drawRect(
-            brush = Brush.radialGradient(
-                colors = listOf(color.copy(alpha = alpha), Color.Transparent),
-                center = Offset(size.width / 2f, size.height / 2f),
-                radius = size.maxDimension * 0.75f,
-            ),
-        )
-        drawRect(
-            color = color.copy(alpha = alpha),
-            style = Stroke(width = strokeWidth),
-        )
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .size(BADGE_SIZE)
+                .background(color, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            iconBitmap?.let {
+                Image(bitmap = it, contentDescription = null, modifier = Modifier.size(ICON_SIZE))
+            }
+        }
     }
 }
