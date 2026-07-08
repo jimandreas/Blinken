@@ -2,11 +2,14 @@ package com.jimandreas.blinken.settings.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -47,7 +50,7 @@ fun AppEntryRow(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp, horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.Top,
     ) {
         if (icon != null) {
             val bitmap = remember(icon.packageName) { icon.icon.toBitmap().asImageBitmap() }
@@ -57,47 +60,61 @@ fun AppEntryRow(
                 modifier = Modifier.size(40.dp),
             )
         }
-        Text(
-            text = entry.label,
+
+        Column(
             modifier = Modifier
                 .weight(1f)
                 .padding(start = 12.dp),
-        )
+        ) {
+            Text(
+                text = entry.label,
+                modifier = Modifier.fillMaxWidth(),
+                maxLines = 1,
+            )
 
-        Box(
-            modifier = Modifier
-                .size(20.dp)
-                .clip(CircleShape)
-                .background(Color(entry.colorArgb)),
-        )
-        TextButton(onClick = { colorMenuExpanded = true }) { Text("Color") }
-        DropdownMenu(expanded = colorMenuExpanded, onDismissRequest = { colorMenuExpanded = false }) {
-            COLOR_PRESETS.forEach { preset ->
-                DropdownMenuItem(
-                    text = { Text(preset.label) },
-                    onClick = {
-                        onColorSelected(preset.argb)
-                        colorMenuExpanded = false
-                    },
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(Color(entry.colorArgb)),
                 )
+                TextButton(onClick = { colorMenuExpanded = true }) { Text("Color") }
+                DropdownMenu(expanded = colorMenuExpanded, onDismissRequest = { colorMenuExpanded = false }) {
+                    COLOR_PRESETS.forEach { preset ->
+                        DropdownMenuItem(
+                            text = { Text(preset.label) },
+                            onClick = {
+                                onColorSelected(preset.argb)
+                                colorMenuExpanded = false
+                            },
+                        )
+                    }
+                }
+
+                TextButton(onClick = { durationMenuExpanded = true }) { Text("${entry.durationMs / 1000}s") }
+                DropdownMenu(expanded = durationMenuExpanded, onDismissRequest = { durationMenuExpanded = false }) {
+                    DURATION_PRESETS_MS.forEach { ms ->
+                        DropdownMenuItem(
+                            text = { Text("${ms / 1000}s") },
+                            onClick = {
+                                onDurationSelected(ms)
+                                durationMenuExpanded = false
+                            },
+                        )
+                    }
+                }
+
+                Switch(checked = entry.enabled, onCheckedChange = onEnabledChanged)
+
+                TextButton(onClick = onRemove) { Text("Remove") }
             }
         }
-
-        TextButton(onClick = { durationMenuExpanded = true }) { Text("${entry.durationMs / 1000}s") }
-        DropdownMenu(expanded = durationMenuExpanded, onDismissRequest = { durationMenuExpanded = false }) {
-            DURATION_PRESETS_MS.forEach { ms ->
-                DropdownMenuItem(
-                    text = { Text("${ms / 1000}s") },
-                    onClick = {
-                        onDurationSelected(ms)
-                        durationMenuExpanded = false
-                    },
-                )
-            }
-        }
-
-        Switch(checked = entry.enabled, onCheckedChange = onEnabledChanged)
-
-        TextButton(onClick = onRemove) { Text("Remove") }
     }
 }
