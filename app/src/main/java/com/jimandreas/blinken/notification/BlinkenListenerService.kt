@@ -1,11 +1,16 @@
 package com.jimandreas.blinken.notification
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.os.SystemClock
 import android.service.notification.NotificationListenerService
 import android.service.notification.NotificationListenerService.RankingMap
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.jimandreas.blinken.settings.AllowlistRepository
 import com.jimandreas.blinken.settings.AppSettings
 import kotlinx.coroutines.CoroutineScope
@@ -31,6 +36,8 @@ class BlinkenListenerService : NotificationListenerService() {
     // Null until the DataStore Flow's first emission lands; onNotificationPosted falls back
     // to a one-shot suspend read rather than treating "not loaded yet" as "empty allowlist".
     private val cachedSettings = MutableStateFlow<AppSettings?>(null)
+
+    private var screenOffReceiver: BroadcastReceiver? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -61,21 +68,66 @@ class BlinkenListenerService : NotificationListenerService() {
         scope.launch {
             reconcileActiveReminders(repository.settings.first())
         }
+
+        registerScreenOffReceiver()
+    }
+
+    // setShowWhenLocked only reliably keeps FlashActivity visible when it's launched fresh while
+    // already locked (the full-screen-intent path, which is BAL-exempt by design) - manually
+    // locking the device via the power button while it's already resumed in the foreground drops
+    // it behind the keyguard immediately on at least this device/API level, and it would
+    // otherwise only reappear once ContinuousNudgeReceiver's periodic (~60s) alarm happens to
+    // fire next. Reacting to ACTION_SCREEN_OFF directly closes that gap by re-posting the
+    // trigger the moment the screen actually turns off, instead of waiting on the poll interval.
+    // ACTION_SCREEN_OFF is a protected system broadcast and can only be received via a
+    // dynamically-registered receiver (manifest-declared receivers are excluded from it since
+    // API 26), hence registering/unregistering here rather than in AndroidManifest.xml.
+    private fun registerScreenOffReceiver() {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (!isDeviceCharging(context)) return
+                val settings = cachedSettings.value ?: return
+                // Cheap, natural checkpoint to also re-sync ActiveNotificationsStore against
+                // system truth - otherwise it only happens on listener (re)connect, so any drift
+                // (observed once during testing, cause not fully pinned down) could persist
+                // indefinitely while the service stays continuously bound.
+                reconcileActiveReminders(settings)
+                val visible = resolveVisibleSegments(ActiveNotificationsStore.active.value, settings, System.currentTimeMillis())
+                if (visible.isEmpty()) return
+                Log.d(TAG, "screen off with ${visible.size} visible notification(s), re-triggering continuous display")
+                postContinuousTriggerNotification(context)
+            }
+        }
+        ContextCompat.registerReceiver(this, receiver, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED)
+        screenOffReceiver = receiver
     }
 
     private fun reconcileActiveReminders(settings: AppSettings) {
         val allowedPackages = settings.entries.filter { it.enabled }.map { it.packageName }.toSet()
-        val activeKeysByPackage = activeNotifications
+        val truth = activeNotifications
             .filter { it.packageName in allowedPackages }
-            .groupBy({ it.packageName }, { it.key })
-            .mapValues { (_, keys) -> keys.toSet() }
+            .map { ActiveNotification(it.packageName, it.key, it.postTime) }
+        ActiveNotificationsStore.reconcileAll(this, truth)
 
+        // Reminder alarms don't survive a reboot either, and the two mechanisms (per-package
+        // legacy alarms vs. the single global continuous-mode nudge) must never both be armed for
+        // the same package - see handleNotification/onNotificationRemoved for where they're
+        // normally kept mutually exclusive as notifications arrive/clear in real time.
+        val charging = isDeviceCharging(this)
+        val activePackages = truth.map { it.packageName }.toSet()
         for (packageName in allowedPackages) {
-            val keys = activeKeysByPackage[packageName] ?: emptySet()
-            replaceActiveNotificationKeys(this, packageName, keys)
-            if (keys.isEmpty()) cancelReminder(this, packageName) else scheduleReminder(this, packageName)
+            when {
+                packageName !in activePackages -> cancelReminder(this, packageName)
+                charging -> cancelReminder(this, packageName)
+                else -> scheduleReminder(this, packageName)
+            }
         }
-        Log.d(TAG, "reconciled active reminders for: ${activeKeysByPackage.keys}")
+        if (charging && truth.isNotEmpty()) {
+            ActiveNotificationsStore.scheduleContinuousNudge(this)
+        } else {
+            ActiveNotificationsStore.cancelContinuousNudge(this)
+        }
+        Log.d(TAG, "reconciled active notifications for: $activePackages (charging=$charging)")
     }
 
     override fun onListenerDisconnected() {
@@ -84,6 +136,8 @@ class BlinkenListenerService : NotificationListenerService() {
         cachedSettings.value = null
         serviceJob?.cancel()
         serviceJob = null
+        screenOffReceiver?.let { unregisterReceiver(it) }
+        screenOffReceiver = null
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
@@ -105,6 +159,7 @@ class BlinkenListenerService : NotificationListenerService() {
         val nowEmpty = removeActiveNotificationKey(this, packageName, sbn.key)
         Log.d(TAG, "onNotificationRemoved: $packageName key=${sbn.key} nowEmpty=$nowEmpty")
         if (nowEmpty) cancelReminder(this, packageName)
+        if (ActiveNotificationsStore.active.value.isEmpty()) ActiveNotificationsStore.cancelContinuousNudge(this)
     }
 
     private fun handleNotification(sbn: StatusBarNotification, settings: AppSettings) {
@@ -132,10 +187,17 @@ class BlinkenListenerService : NotificationListenerService() {
         Log.d(TAG, "resolveBlink matched $packageName: color=${spec.colorArgb.toString(16)} durationMs=${spec.durationMs}")
 
         ecoDebouncePrefs.edit().putLong(packageName, now).apply()
-        postFlashTriggerNotification(this, packageName, spec, label = entry?.label ?: packageName)
 
+        // Store update runs before posting the trigger, so SnakeScreen's first composed frame
+        // (once FlashActivity launches) can never miss this notification in a race.
         val wasEmpty = !hasActiveNotifications(this, packageName)
         addActiveNotificationKey(this, packageName, sbn.key)
-        if (wasEmpty) scheduleReminder(this, packageName)
+        postFlashTriggerNotification(this, packageName, spec, label = entry?.label ?: packageName)
+
+        if (isDeviceCharging(this)) {
+            ActiveNotificationsStore.scheduleContinuousNudge(this)
+        } else if (wasEmpty) {
+            scheduleReminder(this, packageName)
+        }
     }
 }

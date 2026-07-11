@@ -70,3 +70,38 @@ fun postFlashTriggerNotification(context: Context, packageName: String, spec: Bl
     NotificationManagerCompat.from(context).notify(FLASH_NOTIFICATION_ID, notification)
     Log.d(TAG, "posted full-screen-intent notification for $label ($packageName)")
 }
+
+// Continuous-mode counterpart to postFlashTriggerNotification: carries no per-notification
+// extras, since FlashActivity's continuous branch (SnakeScreen) re-derives everything it needs
+// live from BatteryManager and ActiveNotificationsStore rather than from intent extras. Used both
+// for the first trigger while charging and by ContinuousNudgeReceiver's re-foreground nudges.
+fun postContinuousTriggerNotification(context: Context) {
+    if (!isPostNotificationsGranted(context)) {
+        Log.w(TAG, "cannot trigger continuous flash: POST_NOTIFICATIONS not granted")
+        return
+    }
+
+    ensureFlashTriggerChannel(context)
+
+    val intent = Intent(context, FlashActivity::class.java).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    val fullScreenPendingIntent = PendingIntent.getActivity(
+        context,
+        1,
+        intent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+    val notification = NotificationCompat.Builder(context, FLASH_TRIGGER_CHANNEL_ID)
+        .setSmallIcon(R.drawable.ic_launcher_monochrome)
+        .setContentTitle("Blinken")
+        .setContentText("Unread notifications")
+        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setCategory(NotificationCompat.CATEGORY_EVENT)
+        .setFullScreenIntent(fullScreenPendingIntent, true)
+        .setAutoCancel(true)
+        .setContentIntent(fullScreenPendingIntent)
+        .build()
+    NotificationManagerCompat.from(context).notify(FLASH_NOTIFICATION_ID, notification)
+    Log.d(TAG, "posted continuous full-screen-intent notification")
+}

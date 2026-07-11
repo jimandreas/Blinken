@@ -6,44 +6,35 @@ import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
 
-private const val ACTIVE_REMINDERS_PREFS = "blinken_active_reminders"
-private const val KEY_PREFIX = "keys_"
-
 const val REMINDER_INTERVAL_MS = 60_000L
 const val EXTRA_REMINDER_PACKAGE_NAME = "reminder_package_name"
 
-// Tracks, per allowlisted package, which of its StatusBarNotification keys are still active
-// (unread/undismissed) - backed by SharedPreferences so it survives process death, same as the
-// existing eco-mode debounce timestamps. Used to decide when to stop the repeat-until-dismissed
-// reminder: once a package's set is empty, its notification(s) have all been cleared.
-
-private fun prefs(context: Context) =
-    context.getSharedPreferences(ACTIVE_REMINDERS_PREFS, Context.MODE_PRIVATE)
-
-private fun prefsKey(packageName: String) = KEY_PREFIX + packageName
+// Facade over ActiveNotificationsStore preserving the original per-package API: these four
+// functions used to own SharedPreferences-backed bookkeeping directly, but that aggregate state
+// (now needed cross-package by the continuous "snake" display, which must enumerate every active
+// notification at once) moved to ActiveNotificationsStore. Kept here, signature-for-signature, so
+// BlinkenListenerService and FlashReminderReceiver need no call-site changes. The AlarmManager
+// machinery below (scheduleReminder/cancelReminder) is unrelated bookkeeping and untouched.
 
 fun hasActiveNotifications(context: Context, packageName: String): Boolean =
-    !prefs(context).getStringSet(prefsKey(packageName), emptySet()).isNullOrEmpty()
+    ActiveNotificationsStore.activeForPackage(context, packageName).isNotEmpty()
 
 fun addActiveNotificationKey(context: Context, packageName: String, notificationKey: String) {
-    val current = prefs(context).getStringSet(prefsKey(packageName), emptySet()) ?: emptySet()
-    prefs(context).edit().putStringSet(prefsKey(packageName), current + notificationKey).apply()
+    ActiveNotificationsStore.add(context, packageName, notificationKey)
 }
 
 // Returns true if the package's active set is now empty (nothing left to remind about).
 fun removeActiveNotificationKey(context: Context, packageName: String, notificationKey: String): Boolean {
-    val current = prefs(context).getStringSet(prefsKey(packageName), emptySet()) ?: emptySet()
-    val updated = current - notificationKey
-    val editor = prefs(context).edit()
-    if (updated.isEmpty()) editor.remove(prefsKey(packageName)) else editor.putStringSet(prefsKey(packageName), updated)
-    editor.apply()
-    return updated.isEmpty()
+    ActiveNotificationsStore.remove(context, packageName, notificationKey)
+    return ActiveNotificationsStore.activeForPackage(context, packageName).isEmpty()
 }
 
 fun replaceActiveNotificationKeys(context: Context, packageName: String, keys: Set<String>) {
-    val editor = prefs(context).edit()
-    if (keys.isEmpty()) editor.remove(prefsKey(packageName)) else editor.putStringSet(prefsKey(packageName), keys)
-    editor.apply()
+    val now = System.currentTimeMillis()
+    val existingByKey = ActiveNotificationsStore.activeForPackage(context, packageName).associateBy { it.key }
+    val newForPackage = keys.map { key -> existingByKey[key] ?: ActiveNotification(packageName, key, now) }
+    val otherPackages = ActiveNotificationsStore.active.value.filterNot { it.packageName == packageName }
+    ActiveNotificationsStore.reconcileAll(context, otherPackages + newForPackage)
 }
 
 private fun reminderPendingIntent(context: Context, packageName: String): PendingIntent {

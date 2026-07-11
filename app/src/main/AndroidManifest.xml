@@ -56,6 +56,10 @@
         <receiver
             android:name=".notification.FlashReminderReceiver"
             android:exported="false" />
+
+        <receiver
+            android:name=".notification.ContinuousNudgeReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

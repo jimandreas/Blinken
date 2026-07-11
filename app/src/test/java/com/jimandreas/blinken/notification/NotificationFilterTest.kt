@@ -54,4 +54,50 @@ class NotificationFilterTest {
         val spec = resolveBlink(entry.packageName, settings, elapsedSinceLastFlashMs = 0L)
         assertEquals(BlinkSpec(entry.colorArgb, entry.durationMs), spec)
     }
+
+    @Test
+    fun `resolveVisibleSegments excludes a notification from a package not in the allowlist`() {
+        val settings = AppSettings(entries = listOf(entry))
+        val active = listOf(ActiveNotification("com.other.app", "key1", postedAtMs = 0L))
+        assertEquals(emptyList<VisibleSegment>(), resolveVisibleSegments(active, settings, nowMs = 0L))
+    }
+
+    @Test
+    fun `resolveVisibleSegments excludes a notification from a disabled entry`() {
+        val settings = AppSettings(entries = listOf(entry.copy(enabled = false)))
+        val active = listOf(ActiveNotification(entry.packageName, "key1", postedAtMs = 0L))
+        assertEquals(emptyList<VisibleSegment>(), resolveVisibleSegments(active, settings, nowMs = 0L))
+    }
+
+    // The safety cap (30 minutes) is a fixed constant independent of entry.durationMs (which is
+    // 2000L here) - see NotificationFilter.CONTINUOUS_SAFETY_CAP_MS.
+    private val thirtyMinutesMs = 30 * 60 * 1000L
+
+    @Test
+    fun `resolveVisibleSegments keeps a notification younger than the safety cap`() {
+        val settings = AppSettings(entries = listOf(entry))
+        val active = listOf(ActiveNotification(entry.packageName, "key1", postedAtMs = 1000L))
+        val result = resolveVisibleSegments(active, settings, nowMs = 1000L + thirtyMinutesMs - 1L)
+        assertEquals(listOf(VisibleSegment(entry.packageName, "key1", entry.colorArgb)), result)
+    }
+
+    @Test
+    fun `resolveVisibleSegments drops a notification exactly at the safety cap boundary`() {
+        val settings = AppSettings(entries = listOf(entry))
+        val active = listOf(ActiveNotification(entry.packageName, "key1", postedAtMs = 1000L))
+        val result = resolveVisibleSegments(active, settings, nowMs = 1000L + thirtyMinutesMs)
+        assertEquals(emptyList<VisibleSegment>(), result)
+    }
+
+    @Test
+    fun `resolveVisibleSegments preserves input ordering`() {
+        val other = entry.copy(packageName = "com.example.chat", durationMs = 5000L)
+        val settings = AppSettings(entries = listOf(entry, other))
+        val active = listOf(
+            ActiveNotification(other.packageName, "key2", postedAtMs = 0L),
+            ActiveNotification(entry.packageName, "key1", postedAtMs = 500L),
+        )
+        val result = resolveVisibleSegments(active, settings, nowMs = 500L)
+        assertEquals(listOf("key2", "key1"), result.map { it.key })
+    }
 }
