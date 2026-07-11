@@ -6,8 +6,9 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- Transient runtime tracking, not user data - must not survive a reinstall/restore, since
+         a restored postedAtMs can poison the continuous-mode safety cap for a reused notification
+         key (see ActiveNotificationsStore.add). -->
+    <exclude domain="sharedpref" path="blinken_active_notifications.xml"/>
+    <exclude domain="sharedpref" path="blinken_eco_debounce.xml"/>
 </full-backup-content>

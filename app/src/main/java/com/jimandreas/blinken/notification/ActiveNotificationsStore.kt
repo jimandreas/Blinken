@@ -64,12 +64,21 @@ object ActiveNotificationsStore {
             .apply()
     }
 
+    // Refreshes postedAtMs even when the key already exists: onNotificationPosted firing at all
+    // means the app just (re-)posted this notification right now, which is a distinct signal from
+    // mergeReconciled's listener-reconnect case (below) where the notification itself hasn't
+    // necessarily changed - only our bookkeeping might have been lost. Not refreshing here let a
+    // key reused across genuinely new messages (e.g. WhatsApp's per-conversation summary
+    // notification) keep an arbitrarily old postedAtMs, which could make the continuous-mode
+    // safety cap wrongly evict a brand-new message once enough time had passed since the key was
+    // first seen - observed on-device after a reinstall restored old ActiveNotificationsStore data
+    // (see backup_rules.xml/data_extraction_rules.xml) whose ancient timestamp then got kept.
     fun add(context: Context, packageName: String, key: String, postedAtMs: Long = System.currentTimeMillis()) {
         init(context)
         synchronized(this) {
             val current = _active.value
-            if (current.any { it.key == key }) return
-            val updated = (current + ActiveNotification(packageName, key, postedAtMs)).sortedBy { it.postedAtMs }
+            val updated = (current.filterNot { it.key == key } + ActiveNotification(packageName, key, postedAtMs))
+                .sortedBy { it.postedAtMs }
             _active.value = updated
             persist(context, updated)
         }
