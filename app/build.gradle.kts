@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.jimandreas.blinken"
+    namespace = "com.bammellab.blinken"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
