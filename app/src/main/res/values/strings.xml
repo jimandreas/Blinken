@@ -1,3 +1,10 @@
 <resources>
     <string name="app_name">Blinken</string>
+    <string name="about_this_app">About this app…</string>
+    <string name="about_this_app_subtitle">Click here for more information.</string>
+    <string name="source_code_title">Source code</string>
+    <string name="source_code_subtitle">This app has source code available on Github. Click here to go to Github.</string>
+    <string name="version_label">Version</string>
+    <string name="close">Close</string>
+    <string name="about_description_text">Blinken is a software replacement for a hardware notification LED.\n\nIt listens for notifications from a user-configurable allowlist of apps and shows something over the lock screen instead of turning on the whole display: a brief colored badge while unplugged, repeating until read or dismissed, or a continuous \"snake\" of unread notifications while charging.\n\nBuilt with Jetpack Compose.\n\nDeveloped by Bammellab.</string>
 </resources>

@@ -21,7 +21,7 @@ Run all unit tests:
 
 Run a single unit test class:
 ```
-./gradlew testDebugUnitTest --tests "com.jimandreas.blinken.notification.NotificationFilterTest"
+./gradlew testDebugUnitTest --tests "com.bammellab.blinken.notification.NotificationFilterTest"
 ```
 
 Instrumented tests require a connected device/emulator:
@@ -30,11 +30,13 @@ Instrumented tests require a connected device/emulator:
 ```
 
 `adb` is not on `PATH` in this dev environment, but it exists at `/c/a/sdk/platform-tools/adb.exe` (invoke it by that path). A physical device has been used for on-device verification in this repo (notification triggering, lockscreen flash behavior, continuous charging-mode snake, `dumpsys alarm`/`dumpsys power`/`dumpsys battery`/`dumpsys notification` inspection). Gotchas hit repeatedly during that testing, worth checking first if a live device behaves unexpectedly:
+- **The Kotlin package (`com.bammellab.blinken`) and the installed package/`applicationId` (`com.jimandreas.blinken`, set separately in `app/build.gradle.kts`) diverged in the `refactor` commit and are not the same string.** `adb`/`dumpsys` commands that take a package name (`<pkg>` below, and anywhere else on the device) need the `applicationId`, `com.jimandreas.blinken` — e.g. the listener rebind's component argument is `com.jimandreas.blinken/com.bammellab.blinken.notification.BlinkenListenerService`, mixing both strings in one argument.
 - Reinstalling the APK (`installDebug`) does **not** rebind `BlinkenListenerService` with the system — notifications silently stop reaching `onNotificationPosted` until you force a rebind: `adb shell cmd notification disallow_listener <pkg>/<service>` then `allow_listener` (same component name). Confirm binding via `adb shell dumpsys activity services <pkg>`.
 - Developer option "Stay awake while charging" (`adb shell settings get global stay_on_while_plugged_in`) overrides the screen-timeout setting entirely while USB-connected for `adb` — this can look exactly like a Blinken bug (screen never dims) when it's unrelated.
 - `adb shell cmd notification post` cannot be used to test allowlist matching — it posts under `pkg=com.android.shell`, not any package you name in the command, since the shell has no way to spoof another app's notification identity (that would be a security hole). Testing the flash/snake needs a real notification from an actually-installed, allowlisted app (e.g. send yourself a WhatsApp or SMS message) while the screen is locked.
 - A notification that's been sitting unread for a long time can look like a missing-icon bug in continuous mode when it's actually the safety cap (`NotificationFilter.CONTINUOUS_SAFETY_CAP_MS`, 30 min) correctly excluding it. Before assuming a rendering bug, compare its tracked age: `adb shell run-as <pkg> cat /data/data/<pkg>/shared_prefs/blinken_active_notifications.xml` (has each key's `postedAtMs`) against `adb shell date +%s%3N` (current device time). Note `run-as` only works against a debuggable (debug-signed) build - it fails with `run-as: package not debuggable` against a release build, so this specific check isn't available when verifying a release APK.
 - A release-signed APK cannot be installed over a debug-signed install of the same app (`adb install -r` fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE: ... signatures do not match`), and vice versa. Verifying a release build (or going back to a debug build afterward) means `adb uninstall <pkg>` first, which wipes app data. `android:allowBackup="true"` plus `data_extraction_rules.xml`/`backup_rules.xml` then sometimes - but not reliably - silently restores prior app data (DataStore allowlist settings, and formerly `ActiveNotificationsStore`'s state too, see below) on the very next install; don't assume a clean uninstall+reinstall means a clean testing slate, and don't be surprised if the allowlist is sometimes empty and sometimes pre-populated across otherwise-identical reinstalls in the same session.
+- **WhatsApp posts two separate notifications (two distinct keys, same conversation) for a single incoming message** on this device - confirmed via `onNotificationRemoved` logging two `com.whatsapp` removals with different keys 139ms apart from one in-app dismissal of one conversation. This means "WhatsApp x2" active segments in earlier testing rounds was one message from one contact, not two independent messages, and dismissing it in-app clears both keys together, not one at a time. Testing scenarios that need two segments to clear at genuinely independent times (e.g. verifying the snake correctly drops one segment while a second keeps animating) need either two distinct WhatsApp conversations (different contacts) or two different allowlisted apps - not two notifications from the same single WhatsApp message.
 
 ## Cutting a release
 
@@ -42,7 +44,7 @@ Push a tag matching `v*` (e.g. `v1.2`) to trigger `.github/workflows/release.yml
 
 ## Architecture
 
-Blinken is a single-module Android app (`:app`, package `com.jimandreas.blinken`) that acts as a software replacement for a hardware notification LED. It listens for notifications from a user-configured allowlist of apps and shows something on the lock screen for as long as the underlying notification stays unread, then stops the moment it's read or dismissed. There are two display modes, chosen live per trigger from current charging state (`ChargingState.isDeviceCharging` — any power source plugged in, not the stricter `BatteryManager.isCharging()`, to match a nightstand/dock use case where the phone may be topped-off but still plugged in):
+Blinken is a single-module Android app (`:app`, Kotlin package `com.bammellab.blinken`, installed as `applicationId` `com.jimandreas.blinken` — see the `adb`/package-name gotcha above) that acts as a software replacement for a hardware notification LED. It listens for notifications from a user-configured allowlist of apps and shows something on the lock screen for as long as the underlying notification stays unread, then stops the moment it's read or dismissed. There are two display modes, chosen live per trigger from current charging state (`ChargingState.isDeviceCharging` — any power source plugged in, not the stricter `BatteryManager.isCharging()`, to match a nightstand/dock use case where the phone may be topped-off but still plugged in):
 - **Unplugged (legacy): periodic flash.** A brief colored+icon badge (`FlashScreen`) wakes the screen, shows for a few seconds, self-dismisses, and repeats roughly every minute while unread.
 - **Charging: continuous snake.** Every currently-unread allowlisted notification renders as a small badge, and all of them move together as a classic Snake-game chain, continuously sweeping the whole screen (`SnakeScreen`/`SnakeEngine`) so nothing sits static long enough to risk OLED burn-in — the screen stays on until everything is read/dismissed.
 
@@ -63,7 +65,8 @@ Package-by-feature layout:
   - **Charging → continuous `SnakeScreen`.** No self-dismiss timer — `SnakeScreen` calls back to finish the activity itself once nothing is left to show (per `resolveVisibleSegments`) or charging stops (checked once per tick). `SnakeEngine.stepSnake` is the pure, unit-tested step function: a boustrophedon ("lawnmower") sweep — the head advances one grid cell per tick, reversing horizontal direction at the side walls and additionally bouncing vertical direction at the top/bottom row, so the whole grid gets swept over time. (A simpler fixed-clockwise-turn rule was considered and rejected — it converges to tracing just the screen's outer perimeter forever after the first wall hit, leaving the interior always idle.) Each currently-unread notification is one segment: `SnakeEngine.mapSegments` zips the oldest-first notification list against the snake's head-first position history, so the oldest unread notification renders at the snake's head. Segments render as smaller versions of the legacy badge, with a `remember(packageName)`-scoped icon lookup per segment inside a `key(notificationKey)` block so multiple distinct apps on screen at once don't fight over Compose recomposition identity.
   - **Settings-DataStore race — already fixed once, worth knowing if it regresses.** `SnakeScreen` collects `AllowlistRepository.settings` via `collectAsState`; seeding that with `AppSettings.DEFAULT` (empty entries) instead of `null` made the very first composed frame see zero allowlist entries, compute an empty visible-segments list, and immediately call `onFinished()` — closing `FlashActivity` before the real DataStore-backed settings had a chance to load. Fixed by seeding `null` and early-returning until a real value arrives, mirroring the same "not loaded yet vs. empty" distinction `BlinkenListenerService.cachedSettings` already makes for the legacy path. Relatedly, the visible-segments list must be recomputed on every recomposition rather than `remember(active, settings)`-memoized, since the safety cap depends on wall-clock time passing even when neither the active-notification list nor settings change.
 - **`settings/`** — persistence and data. `AllowlistRepository` wraps a Preferences DataStore, serializing the whole `AppSettings` object (allowlist entries + global defaults + eco mode flag) to **one JSON string under a single key** via kotlinx.serialization, rather than one Preferences key per package — the allowlist is always read/written as a cohesive unit, so this keeps writes atomic and avoids key-prefix enumeration. `InstalledAppsProvider` queries `PackageManager` for the "add app" picker; this requires the `<queries>` element in `AndroidManifest.xml` (declared for `MAIN`/`LAUNCHER` intents) because of Android 11+ package-visibility filtering — without it, `getInstalledApplications()` silently returns almost nothing.
-  - **`settings/ui/`** — Compose UI. No `NavHost`: `MainActivity` hosts `SettingsScreen` directly as the only destination, with `AddAppDialog`/color/duration pickers as dialogs and dropdowns over hoisted state, not separate nav routes. `SettingsScreen` loads the installed-apps list once via `produceState` + `Dispatchers.IO` (not inline in `remember{}`) and derives all per-row icon lookups and the "add app" candidate list from that single cached list, to avoid repeated main-thread `PackageManager` scans on every allowlist edit. `PermissionBanner` tracks notification access, `POST_NOTIFICATIONS`, `USE_FULL_SCREEN_INTENT`, and battery-optimization-exemption state; all but the runtime `POST_NOTIFICATIONS` request (via `rememberLauncherForActivityResult`) are rechecked through a `DisposableEffect`/`LifecycleEventObserver` on `ON_RESUME`, since granting them happens in a separate system Settings screen that doesn't otherwise trigger recomposition.
+  - **`settings/ui/`** — Compose UI. No `NavHost`: `MainActivity` hosts `SettingsScreen` directly as the only destination, with `AddAppDialog`/color/duration pickers and `InfoDialog`/`InfoDescriptionDialog` as dialogs and dropdowns over hoisted state, not separate nav routes. `SettingsScreen` loads the installed-apps list once via `produceState` + `Dispatchers.IO` (not inline in `remember{}`) and derives all per-row icon lookups and the "add app" candidate list from that single cached list, to avoid repeated main-thread `PackageManager` scans on every allowlist edit. `PermissionBanner` tracks notification access, `POST_NOTIFICATIONS`, `USE_FULL_SCREEN_INTENT`, and battery-optimization-exemption state; all but the runtime `POST_NOTIFICATIONS` request (via `rememberLauncherForActivityResult`) are rechecked through a `DisposableEffect`/`LifecycleEventObserver` on `ON_RESUME`, since granting them happens in a separate system Settings screen that doesn't otherwise trigger recomposition.
+  - **`InfoDialog`/`InfoDescriptionDialog`**, reached via an Info icon in a new `TopAppBar` on `SettingsScreen`: an about/source-code/version menu (source link opens `https://github.com/jimandreas/Blinken` via `ACTION_VIEW`, no `<queries>` entry needed since implicit `http`/`https` view intents are exempt from Android 11+ package-visibility filtering) and a separate description dialog, both showing the `bammellaboneline.png` logo. The version row reads `BuildConfig.VERSION_NAME` directly rather than a hardcoded string, which requires `buildFeatures.buildConfig = true` in `app/build.gradle.kts` (off by default since AGP 8) - added specifically to back this dialog.
 
 ### Key architectural decisions
 
@@ -73,7 +76,7 @@ Package-by-feature layout:
 - **Continuous-mode safety cap is a fixed constant, not user-configurable.** Considered and rejected: reusing per-app `durationMs` (tried first — broke the freshly-added-entry case, see `notification/` above), and adding a second per-app field with its own UI picker. A single fixed constant (`NotificationFilter.CONTINUOUS_SAFETY_CAP_MS`) was simplest and avoids a setting whose meaning silently depends on charging state; revisit only if real usage shows 30 minutes is wrong for its actual purpose (bounding a pathologically long-unread notification, not mirroring flash duration).
 - **Charging = any power source plugged in, not `BatteryManager.isCharging()`.** `ChargingState.isDeviceCharging` deliberately uses the looser `EXTRA_PLUGGED != 0` check, so a topped-off phone sitting on a dock still gets continuous mode rather than reverting to legacy periodic flashes mid-session.
 
-### Continuous-mode on-device verification status (as of 2026-07-11)
+### Continuous-mode on-device verification status (as of 2026-07-12)
 
 Verified on a physical device (see Commands section for the `adb` path and rebind gotcha):
 - Legacy unplugged flash-and-repeat is unaffected by the continuous-mode changes and behaves as before.
@@ -82,14 +85,44 @@ Verified on a physical device (see Commands section for the `adb` path and rebin
 - `ActiveNotificationsStore` drift from system truth was observed once (see inline note above) and confirmed self-healing via forced reconnect; the new screen-off-triggered reconciliation is expected to bound this going forward but hasn't yet been observed catching a real drift in the act (only exercised via the forced-reconnect workaround).
 - Four real bugs were caught and fixed across this testing round (all described inline above): the settings-DataStore race that closed `FlashActivity` almost instantly, the `durationMs`-as-safety-cap default being far too short, the store-drift-from-truth issue, and the manual-lock-drops-behind-keyguard gap.
 
-A second, separate testing round the same day verified the release-signed builds specifically (`.github/workflows/release.yml`, first added this day):
-- v1.1 and v1.2 release-signed APKs both install cleanly, launch, and correctly rebind `BlinkenListenerService` (forced via `disallow_listener`/`allow_listener`, per the reinstall gotcha above).
-- A fifth real bug was caught and fixed in this round: `ActiveNotificationsStore.add()` preserving a stale `postedAtMs` across an uninstall+reinstall (via Android's default backup/restore), wrongly tripping the continuous-mode safety cap for a brand-new notification reusing an old tracked key - see the inline note under `ActiveNotificationsStore` above. Fixed and re-verified live in v1.2: fresh WhatsApp and Google Messages notifications both correctly rendered in the snake after the fix, while a genuinely-old (~2hr-unread) Messages notification already present on the device was correctly excluded by the safety cap in that same session - useful confirmation the cap itself was never the problem, only the timestamp feeding it.
-- The `ACTION_SCREEN_OFF` receiver correctly re-triggered the continuous display after a screen timeout that occurred while the device was already locked and the snake was showing (i.e. not a manual power-button lock, which was the scenario covered in the first testing round above) - a slightly different case of the same mechanism, now also confirmed live.
+A second, separate testing round the same day verified the release-signed builds specifically
+(`.github/workflows/release.yml`, first added this day):
+ v1.1 and v1.2 release-signed APKs both install cleanly, launch, and correctly 
+ rebind `BlinkenListenerService` (forced via `disallow_listener`/`allow_listener`, 
+ per the reinstall gotcha above).
+ A fifth real bug was caught and fixed in this round: `ActiveNotificationsStore.add()` 
+ preserving a stale `postedAtMs` across an uninstall+reinstall 
+ (via Android's default backup/restore), wrongly tripping the continuous-mode safety cap 
+ for a brand-new notification reusing an old tracked key - see the inline note under 
+ `ActiveNotificationsStore` above. Fixed and re-verified live in v1.2: fresh 
+ WhatsApp and Google Messages notifications both correctly rendered in the snake
+ after the fix, while a genuinely-old (~2hr-unread) Messages notification already 
+ present on the device was correctly excluded by the safety cap in that same session - 
+ useful confirmation the cap itself was never the problem, only the timestamp feeding it.
+ The `ACTION_SCREEN_OFF` receiver correctly re-triggered the continuous display after a 
+ screen timeout that occurred while the device was already locked and the snake was showing
+ (i.e. not a manual power-button lock, which was the scenario covered in the first testing
+ round above) - a slightly different case of the same mechanism, now also confirmed live.
+
+A third testing round covered timeout/Doze-adjacent behavior specifically:
+- Full-screen sweep coverage over a longer session spanning many rows, including the
+  vertical-direction bounce at the top/bottom of the grid, confirmed live (not just the
+  first two rows previously observed).
+- `ContinuousNudgeReceiver`'s periodic fallback confirmed to keep firing roughly every
+  `CONTINUOUS_NUDGE_INTERVAL_MS` (60s) even under forced deep Doze (`adb shell dumpsys
+  deviceidle force-idle`), i.e. `setAndAllowWhileIdle` is in fact still being honored at
+  the requested cadence rather than getting throttled toward the OS's longer real-Doze
+  minimum interval - at least over the span actually observed forced-idle.
+- Unplugging mid-continuous-session correctly hands back to the legacy path: logcat showed
+  `FlashActivity` transition to `state=FINISHING` on unplug (`SnakeScreen`'s tick loop
+  detecting `isDeviceCharging` go false and calling `onFinished()`, as designed). The app
+  process also happened to die and restart during the unplugged interval in this run; on
+  re-plugging, `onListenerConnected` reconciliation (`charging=true`) plus the
+  `ACTION_SCREEN_OFF` receiver correctly resumed continuous mode from cold-start with no
+  manual intervention - an incidental but useful confirmation that process-death recovery
+  (see `ActiveNotificationsStore` reconciliation above) also covers the continuous path,
+  not just the legacy one.
 
 Not yet verified on-device:
-- Unplugging mid-continuous-session cleanly handing back to the legacy path (the code path exists — `SnakeScreen`'s tick loop checks `isDeviceCharging` once per tick and calls `onFinished()` — but hasn't been watched live).
-- Full-screen sweep coverage over a longer session spanning many rows and a vertical-direction bounce at the bottom/top of the grid (only the first two rows have been observed so far).
-- Snake behavior as segments are individually dismissed/read one at a time while continuous mode is showing (only simultaneous multi-segment display has been observed).
-- `ContinuousNudgeReceiver`'s periodic fallback specifically (as opposed to the new screen-off-triggered path) across a real Doze/long-idle window.
+- Snake behavior as segments are individually dismissed/read one at a time while continuous mode is showing, at genuinely independent times. One attempt used what looked like two WhatsApp segments, but they turned out to be two notification keys from a single incoming message (see the WhatsApp double-notification gotcha above), so both cleared together (`onNotificationRemoved` 139ms apart) rather than exercising a real one-survives-while-one-is-dismissed case. Retest with two distinct WhatsApp conversations (different contacts) or two different allowlisted apps.
 - The `ACTION_SCREEN_OFF` receiver's behavior when the screen turns off for reasons other than a manual lock (e.g. natural timeout while already unlocked and idle, or `power` button double-tap camera gestures on some OEMs).
