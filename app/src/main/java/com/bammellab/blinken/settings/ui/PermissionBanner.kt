@@ -3,8 +3,6 @@ package com.bammellab.blinken.settings.ui
 import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.os.Build
-import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,11 +24,11 @@ fun PermissionBanner(
     notificationAccessGranted: Boolean,
     postNotificationsGranted: Boolean,
     fullScreenIntentAllowed: Boolean,
+    batteryUnrestricted: Boolean,
     onPostNotificationsResult: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val batteryUnrestricted = isIgnoringBatteryOptimizations(context)
     val postNotificationsLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
         onPostNotificationsResult,
@@ -83,9 +81,3 @@ private fun fullScreenIntentSettingsIntent(context: Context): Intent =
     Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
         data = "package:${context.packageName}".toUri()
     }
-
-private fun isIgnoringBatteryOptimizations(context: Context): Boolean {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
-    val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-    return powerManager.isIgnoringBatteryOptimizations(context.packageName)
-}

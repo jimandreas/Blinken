@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.PowerManager
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 
@@ -27,4 +28,10 @@ fun canUseFullScreenIntent(context: Context): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return true
     val notificationManager = context.getSystemService(NotificationManager::class.java)
     return notificationManager.canUseFullScreenIntent()
+}
+
+fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+    val powerManager = context.getSystemService(PowerManager::class.java)
+    return powerManager.isIgnoringBatteryOptimizations(context.packageName)
 }

@@ -13,7 +13,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.jimandreas.blinken"
+        applicationId = "com.bammellab.blinken"
         minSdk = 24
         targetSdk = 36
         versionCode = 4

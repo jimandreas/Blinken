@@ -35,6 +35,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.bammellab.blinken.notification.canUseFullScreenIntent
+import com.bammellab.blinken.notification.isIgnoringBatteryOptimizations
 import com.bammellab.blinken.notification.isNotificationAccessGranted
 import com.bammellab.blinken.notification.isPostNotificationsGranted
 import com.bammellab.blinken.settings.AllowlistRepository
@@ -69,6 +70,7 @@ fun SettingsScreen(
     var notificationAccessGranted by remember { mutableStateOf(isNotificationAccessGranted(context)) }
     var postNotificationsGranted by remember { mutableStateOf(isPostNotificationsGranted(context)) }
     var fullScreenIntentAllowed by remember { mutableStateOf(canUseFullScreenIntent(context)) }
+    var batteryUnrestricted by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -76,6 +78,7 @@ fun SettingsScreen(
                 notificationAccessGranted = isNotificationAccessGranted(context)
                 postNotificationsGranted = isPostNotificationsGranted(context)
                 fullScreenIntentAllowed = canUseFullScreenIntent(context)
+                batteryUnrestricted = isIgnoringBatteryOptimizations(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -110,6 +113,7 @@ fun SettingsScreen(
                 notificationAccessGranted = notificationAccessGranted,
                 postNotificationsGranted = postNotificationsGranted,
                 fullScreenIntentAllowed = fullScreenIntentAllowed,
+                batteryUnrestricted = batteryUnrestricted,
                 onPostNotificationsResult = { granted -> postNotificationsGranted = granted },
                 modifier = Modifier.padding(16.dp),
             )
