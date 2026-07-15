@@ -11,6 +11,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.bammellab.blinken.notification.isDeviceCharging
 import com.bammellab.blinken.settings.AllowlistRepository
@@ -71,6 +74,7 @@ class FlashActivity : ComponentActivity() {
         Log.d(TAG, "applyIntent: continuous=$continuous")
 
         NotificationManagerCompat.from(this).cancel(FLASH_NOTIFICATION_ID)
+        setSystemBarsHidden(continuous)
 
         if (continuous) {
             // No self-dismiss timer here - SnakeScreen calls finish() itself once nothing is
@@ -97,6 +101,23 @@ class FlashActivity : ComponentActivity() {
                 Log.d(TAG, "self-dismiss timer elapsed, finishing")
                 finish()
             }
+        }
+    }
+
+    // Only applied to the continuous snake (status/nav bars stay put for the legacy flash badge,
+    // which is brief and not meant to be a full-screen takeover). singleTask reuses this Activity
+    // instance across triggers, so this must also restore the bars if a later trigger switches
+    // back to legacy (e.g. unplugging mid-continuous-session).
+    private fun setSystemBarsHidden(enabled: Boolean) {
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        if (enabled) {
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            WindowCompat.setDecorFitsSystemWindows(window, true)
+            controller.show(WindowInsetsCompat.Type.systemBars())
         }
     }
 
