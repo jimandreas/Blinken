@@ -26,6 +26,16 @@ private const val TAG = "FlashTrigger"
 // same way.
 private const val FLASH_TRIGGER_CHANNEL_ID = "blinken_flash_trigger"
 
+// The trigger notification's only job is to fire its full-screen intent, which the OS does
+// immediately at post time (or not at all) - it never needs to outlive that moment. Without a
+// timeout, a copy that didn't get consumed/cancelled (e.g. posted while FlashActivity was
+// already in the foreground, so no onNewIntent -> no cancel) lingers invisibly in the shade
+// (VISIBILITY_SECRET hides it on the lockscreen) and then pops up as a "Blinken - Unread
+// notifications" heads-up the moment the user unlocks, burying the real notification they
+// actually want to read - observed on-device. setTimeoutAfter is API 26+; below that the
+// existing cancel paths (FlashActivity.applyIntent, unlock detection) still apply.
+private const val TRIGGER_NOTIFICATION_TIMEOUT_MS = 3_000L
+
 private fun ensureFlashTriggerChannel(context: Context) {
     val channel = NotificationChannelCompat.Builder(FLASH_TRIGGER_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_HIGH)
         .setName("Flash trigger")
@@ -40,6 +50,10 @@ private fun ensureFlashTriggerChannel(context: Context) {
 fun postFlashTriggerNotification(context: Context, packageName: String, spec: BlinkSpec, label: String) {
     if (!isPostNotificationsGranted(context)) {
         Log.w(TAG, "cannot trigger flash: POST_NOTIFICATIONS not granted")
+        return
+    }
+    if (isDeviceInActiveUnlockedUse(context)) {
+        Log.d(TAG, "device unlocked and in use, suppressing flash trigger for $packageName")
         return
     }
 
@@ -63,6 +77,11 @@ fun postFlashTriggerNotification(context: Context, packageName: String, spec: Bl
         .setContentText("Blinken flash triggered")
         .setPriority(NotificationCompat.PRIORITY_HIGH)
         .setCategory(NotificationCompat.CATEGORY_EVENT)
+        // Internal trigger only - keep it out of the lockscreen notification list (full-screen
+        // intent auto-launch is not affected by lockscreen visibility).
+        .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+        .setTimeoutAfter(TRIGGER_NOTIFICATION_TIMEOUT_MS)
+        .setOnlyAlertOnce(true)
         .setFullScreenIntent(fullScreenPendingIntent, true)
         .setAutoCancel(true)
         .setContentIntent(fullScreenPendingIntent)
@@ -78,6 +97,10 @@ fun postFlashTriggerNotification(context: Context, packageName: String, spec: Bl
 fun postContinuousTriggerNotification(context: Context) {
     if (!isPostNotificationsGranted(context)) {
         Log.w(TAG, "cannot trigger continuous flash: POST_NOTIFICATIONS not granted")
+        return
+    }
+    if (isDeviceInActiveUnlockedUse(context)) {
+        Log.d(TAG, "device unlocked and in use, suppressing continuous trigger")
         return
     }
 
@@ -98,6 +121,11 @@ fun postContinuousTriggerNotification(context: Context) {
         .setContentText("Unread notifications")
         .setPriority(NotificationCompat.PRIORITY_HIGH)
         .setCategory(NotificationCompat.CATEGORY_EVENT)
+        // Internal trigger only - keep it out of the lockscreen notification list (full-screen
+        // intent auto-launch is not affected by lockscreen visibility).
+        .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+        .setTimeoutAfter(TRIGGER_NOTIFICATION_TIMEOUT_MS)
+        .setOnlyAlertOnce(true)
         .setFullScreenIntent(fullScreenPendingIntent, true)
         .setAutoCancel(true)
         .setContentIntent(fullScreenPendingIntent)

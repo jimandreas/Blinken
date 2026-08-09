@@ -9,7 +9,9 @@ import android.os.SystemClock
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.bammellab.blinken.flash.FLASH_NOTIFICATION_ID
 import com.bammellab.blinken.settings.AllowlistRepository
 import com.bammellab.blinken.settings.AppSettings
 import kotlinx.coroutines.CoroutineScope
@@ -81,23 +83,46 @@ class BlinkenListenerService : NotificationListenerService() {
     // ACTION_SCREEN_OFF is a protected system broadcast and can only be received via a
     // dynamically-registered receiver (manifest-declared receivers are excluded from it since
     // API 26), hence registering/unregistering here rather than in AndroidManifest.xml.
+    // ACTION_USER_PRESENT (unlock) shares the receiver: the display is a lockscreen-only
+    // feature, so unlocking cancels any trigger notification still pending/lingering in the
+    // shade rather than letting it sit there as a visible "Unread notifications" entry.
+    // ACTION_POWER_CONNECTED/DISCONNECTED also share it: the legacy per-package reminder alarms
+    // and the single continuous nudge are mutually exclusive per charging state, and the ONLY
+    // thing that swaps one set for the other is reconcileActiveReminders - without reacting to
+    // the power transition itself, unplugging mid-continuous-session left still-unread
+    // notifications with NO reminder armed at all (reminders were cancelled when charging began,
+    // and nothing re-armed them), so the unplugged momentary flash never fired again
+    // (user-reported).
     private fun registerScreenOffReceiver() {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                if (!isDeviceCharging(context)) return
+                if (intent.action == Intent.ACTION_USER_PRESENT) {
+                    Log.d(TAG, "device unlocked, cancelling any pending flash trigger notification")
+                    NotificationManagerCompat.from(context).cancel(FLASH_NOTIFICATION_ID)
+                    return
+                }
                 val settings = cachedSettings.value ?: return
-                // Cheap, natural checkpoint to also re-sync ActiveNotificationsStore against
-                // system truth - otherwise it only happens on listener (re)connect, so any drift
-                // (observed once during testing, cause not fully pinned down) could persist
-                // indefinitely while the service stays continuously bound.
+                // Cheap, natural checkpoint to re-sync ActiveNotificationsStore against system
+                // truth (drift observed once during testing, cause not fully pinned down) AND to
+                // arm whichever reminder mechanism matches the current charging state - this is
+                // what re-arms the legacy per-package alarms after unplugging, and what swaps
+                // them back out for the continuous nudge after plugging in.
+                Log.d(TAG, "reconciling on ${intent.action}")
                 reconcileActiveReminders(settings)
+                if (!isDeviceCharging(context)) return
                 val visible = resolveVisibleSegments(ActiveNotificationsStore.active.value, settings, System.currentTimeMillis())
                 if (visible.isEmpty()) return
-                Log.d(TAG, "screen off with ${visible.size} visible notification(s), re-triggering continuous display")
+                Log.d(TAG, "${intent.action} while charging with ${visible.size} visible notification(s), re-triggering continuous display")
                 postContinuousTriggerNotification(context)
             }
         }
-        ContextCompat.registerReceiver(this, receiver, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED)
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_USER_PRESENT)
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+        }
+        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         screenOffReceiver = receiver
     }
 
@@ -185,17 +210,28 @@ class BlinkenListenerService : NotificationListenerService() {
         }
         Log.d(TAG, "resolveBlink matched $packageName: color=${spec.colorArgb.toString(16)} durationMs=${spec.durationMs}")
 
-        ecoDebouncePrefs.edit().putLong(packageName, now).apply()
+        // Only record an eco-debounce timestamp for a flash that will actually show - the
+        // trigger is suppressed while the device is in active unlocked use (see FlashTrigger),
+        // and a never-shown flash must not debounce away the next real one. Active-notification
+        // tracking and reminder/nudge scheduling below still run regardless, so the display
+        // picks the notification up as soon as the device locks again.
+        if (!isDeviceInActiveUnlockedUse(this)) {
+            ecoDebouncePrefs.edit().putLong(packageName, now).apply()
+        }
 
         // Store update runs before posting the trigger, so SnakeScreen's first composed frame
         // (once FlashActivity launches) can never miss this notification in a race.
-        val wasEmpty = !hasActiveNotifications(this, packageName)
         addActiveNotificationKey(this, packageName, sbn.key)
         postFlashTriggerNotification(this, packageName, spec, label = entry?.label ?: packageName)
 
         if (isDeviceCharging(this)) {
             ActiveNotificationsStore.scheduleContinuousNudge(this)
-        } else if (wasEmpty) {
+        } else {
+            // Unconditionally, not just when the package's active set was previously empty: the
+            // reminder chain may have been cancelled by a charging session (the two mechanisms
+            // are mutually exclusive) while older keys stayed tracked, and a wasEmpty guard then
+            // kept every later arrival from ever restarting it. Re-arming is idempotent anyway -
+            // FLAG_UPDATE_CURRENT just resets the same pending alarm to a fresh 60s.
             scheduleReminder(this, packageName)
         }
     }

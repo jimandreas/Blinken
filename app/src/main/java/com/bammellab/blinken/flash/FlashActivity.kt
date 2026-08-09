@@ -1,6 +1,9 @@
 package com.bammellab.blinken.flash
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -11,11 +14,15 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.bammellab.blinken.notification.isDeviceCharging
+import com.bammellab.blinken.notification.isKeyguardShowingOrDeviceLocked
 import com.bammellab.blinken.settings.AllowlistRepository
 import com.bammellab.blinken.settings.AppSettings
 import kotlinx.coroutines.Job
@@ -31,6 +38,7 @@ const val EXTRA_PACKAGE_NAME = "package_name"
 const val FLASH_NOTIFICATION_ID = 4242
 
 private const val TAG = "FlashActivity"
+private const val UNLOCK_POLL_INTERVAL_MS = 250L
 
 class FlashActivity : ComponentActivity() {
 
@@ -38,12 +46,16 @@ class FlashActivity : ComponentActivity() {
     private val packageNameState = mutableStateOf<String?>(null)
     private val continuousModeState = mutableStateOf(false)
     private var dismissJob: Job? = null
+    private var unlockReceiver: BroadcastReceiver? = null
+    private var sawKeyguardLocked = false
     private val repository by lazy { AllowlistRepository(applicationContext) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.d(TAG, "onCreate")
         showOverLockScreen()
+        registerUnlockReceiver()
+        watchForUnlockTransition()
 
         setContent {
             if (continuousModeState.value) {
@@ -66,6 +78,68 @@ class FlashActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         Log.d(TAG, "onResume")
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        unlockReceiver?.let { unregisterReceiver(it) }
+        unlockReceiver = null
+    }
+
+    // The flash/snake is a lockscreen-only display: if the user unlocks the device while it's
+    // showing (setShowWhenLocked keeps this activity on top even after keyguard dismissal),
+    // it should get out of the way immediately rather than sweeping over the unlocked phone
+    // until its notifications happen to clear. Detected two independent ways, because the
+    // ACTION_USER_PRESENT broadcast has proven unreliable on-device while this activity is
+    // occluding the keyguard (user-reported: unlocking left the snake running):
+    // - watchForUnlockTransition polls the keyguard state and finishes on the locked->unlocked
+    //   transition. Transition, not absolute state: launching while the screen is off but the
+    //   keyguard hasn't engaged yet (lock-after-timeout delay, Smart Lock) must NOT self-dismiss,
+    //   since that's still the nightstand scenario this display exists for - in that case the
+    //   locked state is never observed and the poll never fires.
+    // - registerUnlockReceiver keeps the broadcast path as the instant reaction when it does fire.
+    private fun watchForUnlockTransition() {
+        lifecycleScope.launch {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    if (isKeyguardShowingOrDeviceLocked(this@FlashActivity)) {
+                        // Activity field, not loop-local: the unlock can happen while this
+                        // activity is stopped behind the keyguard (manual power-button lock
+                        // drops it back there on this device), and the transition must still
+                        // be recognized when the loop restarts on the post-unlock re-STARTED.
+                        sawKeyguardLocked = true
+                    } else if (sawKeyguardLocked) {
+                        Log.d(TAG, "keyguard transitioned locked -> unlocked, finishing")
+                        // Also sweep up any trigger notification still sitting in the shade
+                        // (posted while locked but never consumed by a full-screen launch) so
+                        // it can't surface as a heads-up over the freshly-unlocked phone. This
+                        // activity is the one component reliably alive at this exact moment -
+                        // the service's ACTION_USER_PRESENT path doesn't fire dependably here.
+                        NotificationManagerCompat.from(this@FlashActivity).cancel(FLASH_NOTIFICATION_ID)
+                        finish()
+                        break
+                    }
+                    delay(UNLOCK_POLL_INTERVAL_MS)
+                }
+            }
+        }
+    }
+
+    private fun registerUnlockReceiver() {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                Log.d(TAG, "device unlocked, finishing")
+                NotificationManagerCompat.from(context).cancel(FLASH_NOTIFICATION_ID)
+                finish()
+            }
+        }
+        ContextCompat.registerReceiver(
+            this,
+            receiver,
+            IntentFilter(Intent.ACTION_USER_PRESENT),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        unlockReceiver = receiver
     }
 
     private fun applyIntent(intent: Intent) {
