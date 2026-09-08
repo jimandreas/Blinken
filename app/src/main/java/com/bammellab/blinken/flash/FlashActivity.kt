@@ -21,6 +21,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.bammellab.blinken.notification.isCallRingingOrActive
 import com.bammellab.blinken.notification.isDeviceCharging
 import com.bammellab.blinken.notification.isKeyguardShowingOrDeviceLocked
 import com.bammellab.blinken.settings.AllowlistRepository
@@ -102,6 +103,18 @@ class FlashActivity : ComponentActivity() {
         lifecycleScope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (true) {
+                    // A ringing/in-progress call owns the lockscreen (see CallState.kt): get out
+                    // of the way of the incoming-call UI rather than flashing or sweeping over
+                    // it. New triggers stay suppressed for the duration at FlashTrigger's choke
+                    // point, and the reminder/nudge chains (still armed, and self-rescheduling
+                    // across a suppressed post) bring the display back once the call ends - as
+                    // does the missed-call notification itself, if the dialer is allowlisted.
+                    if (isCallRingingOrActive(this@FlashActivity)) {
+                        Log.d(TAG, "call ringing or in progress, finishing")
+                        NotificationManagerCompat.from(this@FlashActivity).cancel(FLASH_NOTIFICATION_ID)
+                        finish()
+                        break
+                    }
                     if (isKeyguardShowingOrDeviceLocked(this@FlashActivity)) {
                         // Activity field, not loop-local: the unlock can happen while this
                         // activity is stopped behind the keyguard (manual power-button lock

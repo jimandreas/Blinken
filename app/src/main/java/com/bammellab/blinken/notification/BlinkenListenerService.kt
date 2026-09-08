@@ -211,11 +211,12 @@ class BlinkenListenerService : NotificationListenerService() {
         Log.d(TAG, "resolveBlink matched $packageName: color=${spec.colorArgb.toString(16)} durationMs=${spec.durationMs}")
 
         // Only record an eco-debounce timestamp for a flash that will actually show - the
-        // trigger is suppressed while the device is in active unlocked use (see FlashTrigger),
-        // and a never-shown flash must not debounce away the next real one. Active-notification
-        // tracking and reminder/nudge scheduling below still run regardless, so the display
-        // picks the notification up as soon as the device locks again.
-        if (!isDeviceInActiveUnlockedUse(this)) {
+        // trigger is suppressed while the device is in active unlocked use or while a call is
+        // ringing/in progress (see FlashTrigger.flashSuppressedReason), and a never-shown flash
+        // must not debounce away the next real one. Active-notification tracking and
+        // reminder/nudge scheduling below still run regardless, so the display picks the
+        // notification up as soon as the device locks again / the call ends.
+        if (flashSuppressedReason(this) == null) {
             ecoDebouncePrefs.edit().putLong(packageName, now).apply()
         }
 

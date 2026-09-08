@@ -36,6 +36,17 @@ private const val FLASH_TRIGGER_CHANNEL_ID = "blinken_flash_trigger"
 // existing cancel paths (FlashActivity.applyIntent, unlock detection) still apply.
 private const val TRIGGER_NOTIFICATION_TIMEOUT_MS = 3_000L
 
+// Single choke point for "should the display be showing at all right now", shared by both
+// trigger paths (first arrival, FlashReminderReceiver, ContinuousNudgeReceiver, the service's
+// screen-off/power receiver) and re-used by BlinkenListenerService to decide whether a
+// suppressed flash should still consume its eco-mode debounce budget (it must not). Returns a
+// human-readable reason for logging, or null when the display may show.
+fun flashSuppressedReason(context: Context): String? = when {
+    isDeviceInActiveUnlockedUse(context) -> "device unlocked and in use"
+    isCallRingingOrActive(context) -> "phone call ringing or in progress"
+    else -> null
+}
+
 private fun ensureFlashTriggerChannel(context: Context) {
     val channel = NotificationChannelCompat.Builder(FLASH_TRIGGER_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_HIGH)
         .setName("Flash trigger")
@@ -52,8 +63,8 @@ fun postFlashTriggerNotification(context: Context, packageName: String, spec: Bl
         Log.w(TAG, "cannot trigger flash: POST_NOTIFICATIONS not granted")
         return
     }
-    if (isDeviceInActiveUnlockedUse(context)) {
-        Log.d(TAG, "device unlocked and in use, suppressing flash trigger for $packageName")
+    flashSuppressedReason(context)?.let { reason ->
+        Log.d(TAG, "$reason, suppressing flash trigger for $packageName")
         return
     }
 
@@ -99,8 +110,8 @@ fun postContinuousTriggerNotification(context: Context) {
         Log.w(TAG, "cannot trigger continuous flash: POST_NOTIFICATIONS not granted")
         return
     }
-    if (isDeviceInActiveUnlockedUse(context)) {
-        Log.d(TAG, "device unlocked and in use, suppressing continuous trigger")
+    flashSuppressedReason(context)?.let { reason ->
+        Log.d(TAG, "$reason, suppressing continuous trigger")
         return
     }
 
