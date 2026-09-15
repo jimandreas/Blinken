@@ -44,6 +44,13 @@ private const val TRIGGER_NOTIFICATION_TIMEOUT_MS = 3_000L
 fun flashSuppressedReason(context: Context): String? = when {
     isDeviceInActiveUnlockedUse(context) -> "device unlocked and in use"
     isCallRingingOrActive(context) -> "phone call ringing or in progress"
+    // Deliberately suppresses *everything* for the cooldown window, new arrivals included, rather
+    // than only the reminder/nudge repeats: the user has just told us to get off the screen, and
+    // a fresh notification relaunching the display mid-PIN-entry is the same lockout again. The
+    // arrival is still tracked and still arms its reminder/nudge, so it shows up on the next cycle
+    // if the device is still locked once the window expires. See DismissCooldown.kt.
+    isDismissCooldownActive(context) ->
+        "user dismissed the display within the last ${DISMISS_COOLDOWN_MS / 1000}s"
     else -> null
 }
 

@@ -10,9 +10,11 @@
     <cloud-backup>
         <exclude domain="sharedpref" path="blinken_active_notifications.xml"/>
         <exclude domain="sharedpref" path="blinken_eco_debounce.xml"/>
+        <exclude domain="sharedpref" path="blinken_dismiss_cooldown.xml"/>
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="blinken_active_notifications.xml"/>
         <exclude domain="sharedpref" path="blinken_eco_debounce.xml"/>
+        <exclude domain="sharedpref" path="blinken_dismiss_cooldown.xml"/>
     </device-transfer>
 </data-extraction-rules>

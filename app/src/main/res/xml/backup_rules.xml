@@ -11,4 +11,5 @@
          key (see ActiveNotificationsStore.add). -->
     <exclude domain="sharedpref" path="blinken_active_notifications.xml"/>
     <exclude domain="sharedpref" path="blinken_eco_debounce.xml"/>
+    <exclude domain="sharedpref" path="blinken_dismiss_cooldown.xml"/>
 </full-backup-content>

@@ -7,8 +7,10 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.MotionEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.addCallback
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -21,9 +23,11 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.bammellab.blinken.notification.DISMISS_COOLDOWN_MS
 import com.bammellab.blinken.notification.isCallRingingOrActive
 import com.bammellab.blinken.notification.isDeviceCharging
 import com.bammellab.blinken.notification.isKeyguardShowingOrDeviceLocked
+import com.bammellab.blinken.notification.recordUserDismissal
 import com.bammellab.blinken.settings.AllowlistRepository
 import com.bammellab.blinken.settings.AppSettings
 import kotlinx.coroutines.Job
@@ -58,6 +62,13 @@ class FlashActivity : ComponentActivity() {
         registerUnlockReceiver()
         watchForUnlockTransition()
 
+        // Back would otherwise finish() through ComponentActivity's default handling without
+        // recording the cooldown - so the display would bounce straight back and back would look
+        // broken. Route it through the same dismissal path as a touch instead. (In continuous
+        // mode the bars are hidden, so the back *gesture* is often eaten by the transient-bars
+        // swipe; this is for hardware/3-button back and for the legacy flash.)
+        onBackPressedDispatcher.addCallback(this) { dismissForUser("back pressed") }
+
         setContent {
             if (continuousModeState.value) {
                 SnakeScreen(repository = repository, onFinished = { finish() })
@@ -74,6 +85,34 @@ class FlashActivity : ComponentActivity() {
         Log.d(TAG, "onNewIntent")
         setIntent(intent)
         applyIntent(intent)
+    }
+
+    // Any touch anywhere dismisses the display. Handled at dispatchTouchEvent - the very top of
+    // this activity's input pipeline - rather than as a Modifier.clickable inside the Compose
+    // content, so it applies to both modes and cannot be missed because some child composable
+    // consumed the gesture first, or because the touch landed on a badge rather than the
+    // background. Touching the phone means the user is present and dealing with it; the hardware
+    // LED this app imitates never stood between them and their lockscreen.
+    //
+    // Guarded on ACTION_DOWN so a single tap dismisses once rather than re-recording the cooldown
+    // for every move/up event in the same gesture.
+    override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
+        if (ev?.actionMasked == MotionEvent.ACTION_DOWN && !isFinishing) {
+            dismissForUser("touched")
+            return true
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    // Recording the cooldown is the load-bearing half of this, not the finish(): without it the
+    // service's ACTION_SCREEN_OFF receiver (~200ms) or ContinuousNudgeReceiver (~60s) simply
+    // relaunches the display over the keyguard, so the dismissal would buy the user milliseconds.
+    // See DismissCooldown.kt for the lockout this exists to fix.
+    private fun dismissForUser(how: String) {
+        Log.d(TAG, "user dismissed the display ($how), finishing for ${DISMISS_COOLDOWN_MS / 1000}s")
+        recordUserDismissal(this)
+        NotificationManagerCompat.from(this).cancel(FLASH_NOTIFICATION_ID)
+        finish()
     }
 
     override fun onResume() {
